@@ -1,0 +1,109 @@
+# ============================================================
+# MilliSec Blue Team - SIEM Detection Rules (QRadar)
+# ------------------------------------------------------------
+# Source      : Windows Domain Controller (DC01) logs collected via WinCollect
+#               and WindowsAuthServer (log source IDs 262, 263, 264), plus Sysmon.
+# Query lang  : AQL (Ariel Query Language)
+# Workflow    : Rules are version-controlled here on GitHub and pushed to QRadar
+#               via the REST API (Ariel saved searches) by deploy/deploy_qradar.py.
+#               The highest-value rules are also implemented as Custom Rules in the
+#               QRadar console so they raise Offenses (see README).
+# Coverage    : Windows / Active Directory security monitoring (10 rules)
+# ============================================================
+
+rules:
+
+  - name: "AD - New User Account Created"
+    description: "A new Active Directory user account was created (Windows Event ID 4720)."
+    severity: high
+    aql: >
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, LOGSOURCENAME(logsourceid) AS log_source, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4720'
+      LAST 1 HOURS
+
+  - name: "AD - User Added to Privileged Group"
+    description: "A user was added to a security-enabled (admin) group (Event ID 4728/4732/4756)."
+    severity: critical
+    aql: >
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, "TargetUserName" AS added_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" IN ('4728','4732','4756')
+      LAST 1 HOURS
+
+  - name: "AD - Brute Force (Failed Logon Burst)"
+    description: "Multiple failed logons from the same source within a short window (Event ID 4625)."
+    severity: high
+    aql: >
+      SELECT sourceip, "Username" AS target_user, COUNT(*) AS failures
+      FROM events
+      WHERE "EventID" = '4625'
+      GROUP BY sourceip, "Username"
+      HAVING failures > 10
+      LAST 1 HOURS
+
+  - name: "AD - Account Lockout"
+    description: "A user account was locked out, often a sign of brute force (Event ID 4740)."
+    severity: medium
+    aql: >
+      SELECT "Username" AS locked_user, sourceip, COUNT(*) AS lockouts, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4740'
+      GROUP BY locked_user
+      LAST 1 HOURS
+
+  - name: "AD - User Account Deleted"
+    description: "An Active Directory user account was deleted (Event ID 4726)."
+    severity: high
+    aql: >
+      SELECT "Username" AS actor, "TargetUserName" AS deleted_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4726'
+      LAST 1 HOURS
+
+  - name: "AD - Special Privileges Assigned at Logon"
+    description: "A logon was granted special (administrative) privileges (Event ID 4672)."
+    severity: medium
+    aql: >
+      SELECT "Username" AS actor, sourceip, COUNT(*) AS total, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4672'
+      GROUP BY actor
+      LAST 1 HOURS
+
+  - name: "AD - Security Audit Log Cleared"
+    description: "The Windows security event log was cleared, a common anti-forensics action (Event ID 1102)."
+    severity: critical
+    aql: >
+      SELECT "Username" AS actor, sourceip, LOGSOURCENAME(logsourceid) AS log_source, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '1102'
+      LAST 1 HOURS
+
+  - name: "AD - User Password Reset by Another Account"
+    description: "An administrator reset another user's password (Event ID 4724)."
+    severity: medium
+    aql: >
+      SELECT "Username" AS actor, "TargetUserName" AS target_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4724'
+      LAST 1 HOURS
+
+  - name: "AD - Disabled Account Re-Enabled"
+    description: "A previously disabled user account was re-enabled (Event ID 4722)."
+    severity: high
+    aql: >
+      SELECT "Username" AS actor, "TargetUserName" AS enabled_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '4722'
+      LAST 1 HOURS
+
+  - name: "Sysmon - Suspicious Process Creation (LOLBins)"
+    description: "Execution of living-off-the-land binaries often abused by attackers (Sysmon Event ID 1)."
+    severity: high
+    aql: >
+      SELECT "Image" AS process, "CommandLine" AS cmdline, "User" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      FROM events
+      WHERE "EventID" = '1'
+      AND ("Image" ILIKE '%powershell.exe%' OR "Image" ILIKE '%cmd.exe%' OR "Image" ILIKE '%wmic.exe%' OR "Image" ILIKE '%mshta.exe%' OR "Image" ILIKE '%rundll32.exe%' OR "Image" ILIKE '%certutil.exe%')
+      LAST 1 HOURS
