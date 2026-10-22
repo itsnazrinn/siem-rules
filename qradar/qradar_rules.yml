@@ -1,13 +1,15 @@
 # ============================================================
 # MilliSec Blue Team - SIEM Detection Rules (QRadar)
 # ------------------------------------------------------------
-# Source      : Windows Domain Controller (DC01) logs collected via WinCollect
-#               and WindowsAuthServer (log source IDs 262, 263, 264), plus Sysmon.
+# Source      : Windows Domain Controller (DC01) via WinCollect + WindowsAuthServer
+#               (log source IDs 262-264) and Sysmon.
 # Query lang  : AQL (Ariel Query Language)
-# Workflow    : Rules are version-controlled here on GitHub and pushed to QRadar
-#               via the REST API (Ariel saved searches) by deploy/deploy_qradar.py.
-#               The highest-value rules are also implemented as Custom Rules in the
-#               QRadar console so they raise Offenses (see README).
+# Workflow    : Version-controlled on GitHub, deployed to QRadar as saved Ariel
+#               searches via the REST API (deploy/deploy_qradar.py). The top
+#               detections are also built as Custom Rules in the console so that
+#               matches raise Offenses (see README).
+# Note        : Rules use only portable AQL properties (qid, sourceip, Username,
+#               logsourceid) so they validate across the DC01 log sources.
 # Coverage    : Windows / Active Directory security monitoring (10 rules)
 # ============================================================
 
@@ -26,7 +28,7 @@ rules:
     description: "A user was added to a security-enabled (admin) group (Event ID 4728/4732/4756)."
     severity: critical
     aql: >
-      SELECT QIDNAME(qid) AS event, "Username" AS actor, "TargetUserName" AS added_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" IN ('4728','4732','4756')
       LAST 1 HOURS
@@ -56,7 +58,7 @@ rules:
     description: "An Active Directory user account was deleted (Event ID 4726)."
     severity: high
     aql: >
-      SELECT "Username" AS actor, "TargetUserName" AS deleted_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" = '4726'
       LAST 1 HOURS
@@ -75,7 +77,7 @@ rules:
     description: "The Windows security event log was cleared, a common anti-forensics action (Event ID 1102)."
     severity: critical
     aql: >
-      SELECT "Username" AS actor, sourceip, LOGSOURCENAME(logsourceid) AS log_source, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, LOGSOURCENAME(logsourceid) AS log_source, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" = '1102'
       LAST 1 HOURS
@@ -84,7 +86,7 @@ rules:
     description: "An administrator reset another user's password (Event ID 4724)."
     severity: medium
     aql: >
-      SELECT "Username" AS actor, "TargetUserName" AS target_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" = '4724'
       LAST 1 HOURS
@@ -93,7 +95,7 @@ rules:
     description: "A previously disabled user account was re-enabled (Event ID 4722)."
     severity: high
     aql: >
-      SELECT "Username" AS actor, "TargetUserName" AS enabled_user, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Username" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" = '4722'
       LAST 1 HOURS
@@ -102,8 +104,8 @@ rules:
     description: "Execution of living-off-the-land binaries often abused by attackers (Sysmon Event ID 1)."
     severity: high
     aql: >
-      SELECT "Image" AS process, "CommandLine" AS cmdline, "User" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
+      SELECT QIDNAME(qid) AS event, "Process Name" AS process, "Username" AS actor, sourceip, DATEFORMAT(starttime,'yyyy-MM-dd HH:mm:ss') AS time
       FROM events
       WHERE "EventID" = '1'
-      AND ("Image" ILIKE '%powershell.exe%' OR "Image" ILIKE '%cmd.exe%' OR "Image" ILIKE '%wmic.exe%' OR "Image" ILIKE '%mshta.exe%' OR "Image" ILIKE '%rundll32.exe%' OR "Image" ILIKE '%certutil.exe%')
+      AND ("Process Name" ILIKE '%powershell%' OR "Process Name" ILIKE '%cmd.exe%' OR "Process Name" ILIKE '%wmic%' OR "Process Name" ILIKE '%mshta%' OR "Process Name" ILIKE '%rundll32%' OR "Process Name" ILIKE '%certutil%')
       LAST 1 HOURS
