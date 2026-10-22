@@ -70,7 +70,7 @@ rules:
       | spath input=line
       | where status=401 OR status=403
       | stats count by src_ip
-      | where count > 20
+      | where count > 15        # ← updated 20 -> 15  
 
   - name: "Server Error Spike - HTTP 5xx Surge"
     description: "Detects a surge of server-side errors, which can indicate exploitation attempts."
