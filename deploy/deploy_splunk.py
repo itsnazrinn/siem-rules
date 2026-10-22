@@ -10,9 +10,17 @@ Design:
   * This script pulls that YAML and creates/updates each rule in Splunk.
   * To change a rule, edit it on GitHub and re-run this script; Splunk updates.
 
+Security:
+  * No secrets are stored in this file or committed to the repository.
+  * Credentials are read from environment variables at runtime:
+        export SPLUNK_USER="blueteam"
+        export SPLUNK_PASS="your-password"
+        python3 deploy_splunk.py
+
 Usage        : python3 deploy_splunk.py
 Dependencies : pip3 install requests pyyaml
 """
+import os
 import sys
 from datetime import datetime
 
@@ -23,16 +31,16 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ============================ CONFIG ============================
 # Raw URL of the rule file on GitHub (update the branch if not 'main').
-GITHUB_RAW = "https://raw.githubusercontent.com/itsnazrinn/siem-rules/refs/heads/main/splunk/splunk_rules.yml"
+GITHUB_RAW = "https://raw.githubusercontent.com/itsnazrinn/siem-rules/main/splunk/splunk_rules.yml"
 
 # Splunk REST API (management port 8089, NOT the web port 8000).
-SPLUNK_URL  = "https://52.204.109.217:8089"
-SPLUNK_USER = "blueteam"
-SPLUNK_PASS = "CHANGE_ME_SPLUNK_PASSWORD"
+SPLUNK_URL  = os.environ.get("SPLUNK_URL", "https://127.0.0.1:8089")
+SPLUNK_USER = os.environ.get("SPLUNK_USER", "blueteam")
+SPLUNK_PASS = os.environ.get("SPLUNK_PASS", "")      # <-- set via: export SPLUNK_PASS=...
 SPLUNK_APP  = "search"
 
 # Email target for triggered alerts (optional).
-ALERT_EMAIL = "splunk-alert@milli.lol"
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "splunk-alert@milli.lol")
 # ================================================================
 
 SEVERITY_MAP = {"low": "2", "medium": "3", "high": "4", "critical": "5"}
@@ -98,6 +106,10 @@ def deploy_rule(rule):
 
 
 def main():
+    if not SPLUNK_PASS:
+        log("ERROR: SPLUNK_PASS is not set. Run:  export SPLUNK_PASS='your-password'")
+        sys.exit(1)
+
     log("===== Deploying SIEM rules: GitHub -> Splunk =====")
     rules = fetch_rules()
 
