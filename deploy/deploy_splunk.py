@@ -23,7 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ============================ CONFIG ============================
 # Raw URL of the rule file on GitHub (update the branch if not 'main').
-GITHUB_RAW = "https://raw.githubusercontent.com/itsnazrinn/siem-rules/main/splunk/splunk_rules.yml"
+GITHUB_RAW = "https://raw.githubusercontent.com/itsnazrinn/siem-rules/refs/heads/main/splunk/splunk_rules.yml"
 
 # Splunk REST API (management port 8089, NOT the web port 8000).
 SPLUNK_URL  = "https://52.204.109.217:8089"
