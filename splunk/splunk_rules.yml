@@ -1,0 +1,165 @@
+# ============================================================
+# MilliSec Blue Team - SIEM Detection Rules (Splunk)
+# ------------------------------------------------------------
+# Source      : index=web_logs, sourcetype=millisec:nginx
+# Log format  : JSON stored in the "line" field (parsed via `spath input=line`)
+# Workflow    : Rules are version-controlled here on GitHub and pushed to
+#               Splunk via the REST API by deploy/deploy_splunk.py.
+#               Edit a rule here, re-run the deploy script, and Splunk updates.
+# Coverage    : OWASP Top 10 and common web attack patterns (15 rules)
+# ============================================================
+
+rules:
+
+  - name: "SQLi - SQL Injection Attempt (OWASP A03)"
+    description: "Detects SQL injection signatures in the request URI (UNION SELECT, OR 1=1, comments, stacked functions)."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(union(\s|\+|%20)+select|or(\s|\+|%20)+1(\s)*=(\s)*1|information_schema|sleep\(|benchmark\(|'--|%27)"
+      | stats count by src_ip, uri, status
+
+  - name: "XSS - Cross-Site Scripting Attempt (OWASP A03)"
+    description: "Detects cross-site scripting payloads in the request URI (script tags, event handlers, javascript: URIs)."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(<script|%3cscript|onerror(\s)*=|onload(\s)*=|javascript:|alert\(|%3csvg|document\.cookie)"
+      | stats count by src_ip, uri
+
+  - name: "Path Traversal - Directory Traversal Attempt (OWASP A01)"
+    description: "Detects directory traversal sequences used to access files outside the web root."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(\.\./|\.\.%2f|%2e%2e|/etc/passwd|/etc/shadow|boot\.ini|win\.ini)"
+      | stats count by src_ip, uri
+
+  - name: "Command Injection - OS Command Execution Attempt (OWASP A03)"
+    description: "Detects operating-system command injection patterns in the request URI."
+    cron: "*/5 * * * *"
+    severity: critical
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(;(\s)*(ls|cat|id|whoami|wget|curl|bash|sh)|%3b|\|\||&&|`|%60|/bin/sh|/bin/bash)"
+      | stats count by src_ip, uri
+
+  - name: "Recon - Known Scanner User-Agent"
+    description: "Detects requests from well-known offensive security tools by User-Agent."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex user_agent="(?i)(sqlmap|nikto|nmap|nessus|acunetix|masscan|dirbuster|gobuster|wpscan|hydra)"
+      | stats count by src_ip, user_agent
+
+  - name: "Brute Force - Authentication Failure Burst"
+    description: "Detects a high number of unauthorized responses (401/403) from a single source IP."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | where status=401 OR status=403
+      | stats count by src_ip
+      | where count > 20
+
+  - name: "Server Error Spike - HTTP 5xx Surge"
+    description: "Detects a surge of server-side errors, which can indicate exploitation attempts."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | where status >= 500
+      | stats count by src_ip, uri
+      | where count > 10
+
+  - name: "DoS - Request Flood from Single IP"
+    description: "Detects an abnormally high request volume from a single source IP (possible DoS/DDoS)."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | stats count by src_ip
+      | where count > 500
+
+  - name: "Sensitive File Access Attempt"
+    description: "Detects attempts to access sensitive files and secrets (.env, .git, credentials, backups)."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(\.env|\.git|wp-config|\.bak|\.sql|\.htpasswd|id_rsa|\.aws|config\.php)"
+      | stats count by src_ip, uri
+
+  - name: "SSRF - Server-Side Request Forgery Attempt (OWASP A10)"
+    description: "Detects SSRF indicators targeting internal services and cloud metadata endpoints."
+    cron: "*/5 * * * *"
+    severity: high
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(127\.0\.0\.1|localhost|169\.254\.169\.254|0\.0\.0\.0|file://|gopher://|dict://)"
+      | stats count by src_ip, uri
+
+  - name: "HTTP Method Abuse - Unusual Verbs"
+    description: "Detects potentially dangerous HTTP methods (PUT, DELETE, TRACE, CONNECT, PATCH)."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | search method IN ("PUT","DELETE","TRACE","CONNECT","PATCH")
+      | stats count by src_ip, method, uri
+
+  - name: "Log4Shell - JNDI Injection Attempt (OWASP A06)"
+    description: "Detects Log4j JNDI lookup strings (CVE-2021-44228) in the request URI."
+    cron: "*/5 * * * *"
+    severity: critical
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(\$\{jndi:|jndi:ldap|jndi:rmi|jndi:dns)"
+      | stats count by src_ip, uri
+
+  - name: "WordPress - Targeted Attack Endpoints"
+    description: "Detects requests to common WordPress attack surfaces (wp-login, xmlrpc, wp-admin)."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(wp-login|wp-admin|xmlrpc\.php|wp-content|/wp-json)"
+      | stats count by src_ip, uri
+
+  - name: "Recon - Admin Panel Enumeration"
+    description: "Detects enumeration of administrative and management interfaces."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | regex uri="(?i)(/admin|/administrator|/phpmyadmin|/manager|/cpanel|/webmail)"
+      | stats count by src_ip, uri
+
+  - name: "Recon - Directory Brute Force (High 404 Rate)"
+    description: "Detects a high number of 404 responses from a single IP, indicating file/directory brute forcing."
+    cron: "*/5 * * * *"
+    severity: medium
+    search: >
+      index=web_logs sourcetype=millisec:nginx
+      | spath input=line
+      | where status=404
+      | stats count by src_ip
+      | where count > 50
