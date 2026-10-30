@@ -1,16 +1,19 @@
 # ============================================================
 # MilliSec Blue Team - SIEM Detection Rules (QRadar)
 # ------------------------------------------------------------
-# Source      : Windows Domain Controller (DC01) via WinCollect + WindowsAuthServer
-#               (log source IDs 262-264) and Sysmon.
-# Query lang  : AQL (Ariel Query Language)
-# Workflow    : Version-controlled on GitHub, deployed to QRadar as saved Ariel
-#               searches via the REST API (deploy/deploy_qradar.py). The top
-#               detections are also built as Custom Rules in the console so that
-#               matches raise Offenses (see README).
-# Note        : Rules use only portable AQL properties (qid, sourceip, Username,
-#               logsourceid) so they validate across the DC01 log sources.
-# Coverage    : Windows / Active Directory security monitoring (10 rules)
+# Source      : Windows Domain Controller (DC01) via WinCollect
+#               (Microsoft Windows Security Event Log) + Sysmon
+#               (Microsoft-Windows-Sysmon/Operational).
+# Workflow    : These 10 detections are built as Custom Rules in the
+#               QRadar console (so matches raise Offenses), then
+#               EXPORTED via the REST API into a version-controlled
+#               extension (qradar/rules_extension.zip). deploy_qradar.py
+#               re-imports that extension with overwrite=true, so editing
+#               a rule in Git + re-running the script updates QRadar.
+# Note        : The 'aql' blocks below document each rule's detection
+#               logic for reference; the authoritative content ships in
+#               the exported extension.
+# Coverage    : Windows / Active Directory + Sysmon (10 rules)
 # ============================================================
 
 rules:
