@@ -1,102 +1,116 @@
 #!/usr/bin/env python3
 """
-MilliSec Blue Team - SIEM Rule Deployment (GitHub -> QRadar)
-------------------------------------------------------------
-Fetches the version-controlled QRadar detection rules from GitHub and deploys
-their AQL logic to QRadar as saved Ariel searches via the QRadar REST API.
+MilliSec Blue Team - QRadar Rule Deployment (GitHub -> QRadar)   [v2: extension import]
+---------------------------------------------------------------------------------------
+Step 2 of the GitOps flow for QRadar.
 
-Design:
-  * Rules live on GitHub (qradar/qradar_rules.yml) as the single source of truth.
-  * This script pulls that YAML and creates one saved Ariel search per rule.
-  * To change a rule, edit it on GitHub and re-run this script.
-  * The highest-value rules are additionally built as Custom Rules in the QRadar
-    console so that matches raise Offenses (the API cannot create Custom Rules
-    directly in QRadar 7.5 — see the project README).
+Takes the version-controlled extension zip (qradar/rules_extension.zip) that
+holds the 10 Custom Rules and pushes it to QRadar through the REST API:
+    1. uploads the zip          POST /config/extension_management/extensions
+    2. installs with overwrite  POST /config/extension_management/extensions/{id}
+                                       ?action_type=INSTALL&overwrite=true
+    3. waits until the install task reports INSTALLED/COMPLETED
+
+Because these are real Custom Rules (not saved searches), installing them makes
+QRadar raise Offenses on a match. overwrite=true means editing a rule in GitHub
+and re-running this script UPDATES the rule in QRadar (the GitOps update flow).
 
 Security:
-  * No secrets are stored in this file. The API token is read from the
-    environment at runtime:  export QRADAR_TOKEN="..."
-Usage        : python3 deploy_qradar.py
-Dependencies : pip3 install requests pyyaml
+  export QRADAR_HOST="10.0.0.5"
+  export QRADAR_TOKEN="xxxxxxxx-...."     # supplied at runtime, never committed
+
+Usage       : python3 deploy_qradar.py
+Dependencies: pip3 install requests
 """
+
 import os
 import sys
-from datetime import datetime
-
-import yaml
+import time
 import requests
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ============================ CONFIG ============================
-GITHUB_RAW   = "https://raw.githubusercontent.com/itsnazrinn/siem-rules/main/qradar/qradar_rules.yml"
-QRADAR_HOST  = os.environ.get("QRADAR_HOST", "https://184.196.118.227")
-QRADAR_TOKEN = os.environ.get("QRADAR_TOKEN", "")     # export QRADAR_TOKEN=...
-API_VERSION  = "12.0"
-# ================================================================
+HOST  = os.environ.get("QRADAR_HOST")
+TOKEN = os.environ.get("QRADAR_TOKEN")
+API_V = "17.0"
+ZIP   = os.path.join(os.path.dirname(__file__), "..", "qradar", "rules_extension.zip")
+
+if not HOST or not TOKEN:
+    sys.exit("ERROR: set QRADAR_HOST and QRADAR_TOKEN environment variables first.")
+if not os.path.exists(ZIP):
+    sys.exit(f"ERROR: {ZIP} not found. Run export_qradar.py first (or git pull).")
+
+BASE = f"https://{HOST}/api"
+HEAD = {"SEC": TOKEN, "Version": API_V, "Accept": "application/json"}
 
 
 def log(msg):
-    print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
+    print(f"[deploy] {msg}", flush=True)
 
 
-def headers():
-    return {"SEC": QRADAR_TOKEN, "Version": API_VERSION,
-            "Content-Type": "application/json", "Accept": "application/json"}
+def upload():
+    log("uploading extension zip ...")
+    with open(ZIP, "rb") as f:
+        files = {"file": ("rules_extension.zip", f, "application/zip")}
+        r = requests.post(f"{BASE}/config/extension_management/extensions",
+                          headers=HEAD, files=files, verify=False, timeout=180)
+    # 409/22613 = same hub_id+version already uploaded; reuse the existing one
+    if r.status_code == 409:
+        log("zip already uploaded; locating existing extension id ...")
+        return find_existing()
+    r.raise_for_status()
+    ext_id = r.json()["id"]
+    log(f"uploaded: extension id={ext_id}")
+    return ext_id
 
 
-def fetch_rules():
-    resp = requests.get(GITHUB_RAW, timeout=30)
-    resp.raise_for_status()
-    rules = yaml.safe_load(resp.text).get("rules", [])
-    log(f"Fetched {len(rules)} rule(s) from GitHub.")
-    return rules
+def find_existing():
+    r = requests.get(f"{BASE}/config/extension_management/extensions",
+                     headers={**HEAD, "fields": "id,name,status"},
+                     verify=False, timeout=60)
+    r.raise_for_status()
+    exts = r.json()
+    if not exts:
+        sys.exit("ERROR: upload said duplicate but no extensions listed.")
+    ext = sorted(exts, key=lambda e: e["id"])[-1]        # newest
+    log(f"using extension id={ext['id']} ({ext.get('status')})")
+    return ext["id"]
 
 
-def deploy_rule(rule):
-    """Create a saved Ariel search in QRadar from the rule's AQL."""
-    name = rule["name"]
-    severity = rule.get("severity", "medium")
-    aql = " ".join(rule["aql"].split())   # collapse whitespace/newlines
+def install(ext_id):
+    log(f"installing extension id={ext_id} with overwrite=true ...")
+    r = requests.post(
+        f"{BASE}/config/extension_management/extensions/{ext_id}",
+        headers=HEAD,
+        params={"action_type": "INSTALL", "overwrite": "true"},
+        verify=False, timeout=120)
+    r.raise_for_status()                                  # 202 accepted
+    status_id = r.json()["status_id"]
+    log(f"install task started: status_id={status_id}")
+    return status_id
 
-    # 1) Start an Ariel search with the rule's AQL
-    params = {"query_expression": aql}
-    r = requests.post(f"{QRADAR_HOST}/api/ariel/searches",
-                      headers=headers(), params=params, verify=False)
-    if r.status_code not in (200, 201):
-        log(f"  [FAIL] {r.status_code}  {name}: {r.text[:150]}")
-        return False
-    search_id = r.json().get("search_id")
 
-    # 2) Persist/label the search so it is saved and reusable
-    save = requests.post(
-        f"{QRADAR_HOST}/api/ariel/searches/{search_id}",
-        headers=headers(),
-        params={"save_results": "true", "name": name},
-        verify=False)
-
-    if save.status_code in (200, 201):
-        log(f"  [OK]   {severity.upper():8} {name}  ->  saved search {search_id}")
-        return True
-
-    # Even if the label call is unsupported on this build, the search itself ran.
-    log(f"  [OK*]  {severity.upper():8} {name}  ->  search {search_id} (not persisted: {save.status_code})")
-    return True
+def wait_for(status_id):
+    url = f"{BASE}/config/extension_management/extensions_task_status/{status_id}"
+    while True:
+        r = requests.get(url, headers=HEAD, verify=False, timeout=60)
+        r.raise_for_status()
+        status = r.json().get("status")
+        log(f"  status: {status}")
+        if status in ("COMPLETED", "INSTALLED"):
+            return
+        if status in ("FAILED", "INSTALL_FAILED", "CANCELLED"):
+            sys.exit(f"ERROR: install ended with status {status} -- check QRadar preview/logs.")
+        time.sleep(4)
 
 
 def main():
-    if not QRADAR_TOKEN:
-        log("ERROR: QRADAR_TOKEN is not set. Run:  export QRADAR_TOKEN='your-token'")
-        sys.exit(1)
-
-    log("===== Deploying SIEM rules: GitHub -> QRadar =====")
-    rules = fetch_rules()
-
-    deployed = sum(deploy_rule(rule) for rule in rules)
-
-    log(f"===== Done: {deployed}/{len(rules)} rule(s) deployed to QRadar =====")
-    if deployed < len(rules):
-        sys.exit(1)
+    log("===== Deploying QRadar rules: GitHub -> QRadar (extension import) =====")
+    ext_id = upload()
+    status_id = install(ext_id)
+    wait_for(status_id)
+    log("===== Done. Rules are live. Deploy Changes in the console if prompted. =====")
 
 
 if __name__ == "__main__":
